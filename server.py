@@ -1,5 +1,6 @@
 import os
 import uuid
+import time
 import requests
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
@@ -8,6 +9,7 @@ app = Flask(__name__)
 CORS(app)
 
 SARVAM_API_KEY = os.environ.get("SARVAM_API_KEY", "")
+SARVAM_BASE = "https://api.sarvam.ai/doc-ai/v1/job"
 
 HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -127,7 +129,7 @@ HTML = """<!DOCTYPE html>
       <div class="field-row">
         <input type="text" placeholder="field_name" value="${f.name}" oninput="updateField(${f.id},'name',this.value)" />
         <input type="text" placeholder="what to extract" value="${f.desc}" oninput="updateField(${f.id},'desc',this.value)" />
-        <button class="remove-btn" onclick="removeField(${f.id})">×</button>
+        <button class="remove-btn" onclick="removeField(${f.id})">x</button>
       </div>`).join('');
   }
 
@@ -143,60 +145,55 @@ HTML = """<!DOCTYPE html>
     selectedFile = file;
     document.getElementById('dropZone').classList.add('has-file');
     document.getElementById('dropIcon').textContent = '✅';
-    document.getElementById('dropText').innerHTML = `<span class="file-name">${file.name}</span>`;
+    document.getElementById('dropText').innerHTML = '<span class="file-name">' + file.name + '</span>';
     document.getElementById('dropSub').textContent = (file.size / 1024).toFixed(0) + ' KB — click to change';
     document.getElementById('extractBtn').disabled = false;
   }
 
   function syntaxColor(json) {
     return json.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-      .replace(/("(\\\\u[a-zA-Z0-9]{4}|\\\\[^u]|[^\\\\"])*"(\\s*:)?|\\b(true|false|null)\\b|-?\\d+(?:\\.\\d*)?(?:[eE][+\\-]?\\d+)?)/g, m => {
-        let s = 'color:#4f7ef7';
+      .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function(m) {
+        var s = 'color:#4f7ef7';
         if (/^"/.test(m)) s = /:$/.test(m) ? 'color:#1a1a1a;font-weight:600' : 'color:#16a34a';
         else if (/true|false/.test(m)) s = 'color:#d97706';
         else if (/null/.test(m)) s = 'color:#aaa';
-        return `<span style="${s}">${m}</span>`;
+        return '<span style="' + s + '">' + m + '</span>';
       });
   }
 
-  let lastResult = null;
+  var lastResult = null;
+
+  function setStatus(msg) {
+    document.getElementById('resultArea').innerHTML = '<div class="result-placeholder"><div class="spinner" style="width:24px;height:24px;border-color:#ddd;border-top-color:#4f7ef7"></div><span style="font-size:13px;color:#888">' + msg + '</span></div>';
+  }
 
   async function runExtract() {
     if (!selectedFile) return;
-    const btn = document.getElementById('extractBtn');
+    var btn = document.getElementById('extractBtn');
     btn.disabled = true;
     btn.innerHTML = '<div class="spinner"></div> Extracting...';
-    document.getElementById('resultArea').innerHTML = `<div class="result-placeholder"><div class="spinner" style="width:24px;height:24px;border-color:#ddd;border-top-color:#4f7ef7"></div><span style="font-size:13px;color:#888">Sending to Sarvam...</span></div>`;
 
-    const schema = { type: 'object', properties: {} };
-    fields.filter(f => f.name.trim()).forEach(f => {
+    var schema = { type: 'object', properties: {} };
+    fields.filter(function(f) { return f.name.trim(); }).forEach(function(f) {
       schema.properties[f.name.trim()] = { type: 'string', description: f.desc || f.name };
     });
 
-    const form = new FormData();
+    var form = new FormData();
     form.append('file', selectedFile);
     form.append('language', document.getElementById('language').value);
     form.append('schema', JSON.stringify(schema));
 
     try {
-      const res = await fetch('/extract', { method: 'POST', body: form });
-      if (!res.ok) { const t = await res.text(); throw new Error(`${res.status} — ${t}`); }
-      const data = await res.json();
+      setStatus('Uploading document...');
+      var res = await fetch('/extract', { method: 'POST', body: form });
+      if (!res.ok) { var t = await res.text(); throw new Error(res.status + ' — ' + t); }
+      var data = await res.json();
       lastResult = data;
-      document.getElementById('resultArea').innerHTML = `
-        <div class="result-box">
-          <div class="result-header">
-            <span class="result-label">Extracted data</span>
-            <button class="copy-btn" onclick="copyResult()">📋 Copy JSON</button>
-          </div>
-          <pre>${syntaxColor(JSON.stringify(data, null, 2))}</pre>
-        </div>`;
-    } catch (err) {
-      document.getElementById('resultArea').innerHTML = `
-        <div class="error-box">
-          <div class="error-title">⚠️ Error</div>
-          <div class="error-text">${err.message}</div>
-        </div>`;
+      document.getElementById('resultArea').innerHTML =
+        '<div class="result-box"><div class="result-header"><span class="result-label">Extracted data</span><button class="copy-btn" onclick="copyResult()">📋 Copy JSON</button></div><pre>' + syntaxColor(JSON.stringify(data, null, 2)) + '</pre></div>';
+    } catch(err) {
+      document.getElementById('resultArea').innerHTML =
+        '<div class="error-box"><div class="error-title">⚠️ Error</div><div class="error-text">' + err.message + '</div></div>';
     } finally {
       btn.disabled = false;
       btn.innerHTML = '🔍 Extract fields';
@@ -206,7 +203,7 @@ HTML = """<!DOCTYPE html>
 
   function copyResult() {
     if (lastResult) navigator.clipboard.writeText(JSON.stringify(lastResult, null, 2))
-      .then(() => { document.querySelector('.copy-btn').textContent = '✅ Copied'; setTimeout(() => document.querySelector('.copy-btn').textContent = '📋 Copy JSON', 1500); });
+      .then(function() { document.querySelector('.copy-btn').textContent = '✅ Copied'; setTimeout(function() { document.querySelector('.copy-btn').textContent = '📋 Copy JSON'; }, 1500); });
   }
 
   renderFields();
@@ -214,13 +211,20 @@ HTML = """<!DOCTYPE html>
 </body>
 </html>"""
 
+
+def sarvam_headers():
+    return {"api-subscription-key": SARVAM_API_KEY}
+
+
 @app.route("/", methods=["GET"])
 def index():
     return render_template_string(HTML)
 
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
+
 
 @app.route("/extract", methods=["POST"])
 def extract():
@@ -236,8 +240,9 @@ def extract():
         if not SARVAM_API_KEY:
             return jsonify({"error": "SARVAM_API_KEY not set on server"}), 500
 
-        response = requests.post(
-            "https://api.sarvam.ai/doc-ai/v1/job/extract",
+        # Step 1 — Submit job
+        job_res = requests.post(
+            f"{SARVAM_BASE}/extract",
             headers={
                 "api-subscription-key": SARVAM_API_KEY,
                 "Idempotency-Key": str(uuid.uuid4()),
@@ -249,13 +254,44 @@ def extract():
                 "model": "sarvam-vision-v1",
                 "schema": schema,
             },
-            timeout=60
+            timeout=30
         )
 
-        return jsonify(response.json()), response.status_code
+        if not job_res.ok:
+            return jsonify({"error": "Job creation failed", "detail": job_res.text}), job_res.status_code
+
+        job_data = job_res.json()
+        job_id = job_data.get("job_id")
+
+        if not job_id:
+            return jsonify({"error": "No job_id returned", "raw": job_data}), 500
+
+        # Step 2 — Poll until complete
+        for _ in range(30):  # max 60 seconds
+            time.sleep(2)
+            status_res = requests.get(
+                f"{SARVAM_BASE}/{job_id}",
+                headers={"api-subscription-key": SARVAM_API_KEY},
+                timeout=10
+            )
+            if not status_res.ok:
+                continue
+            status_data = status_res.json()
+            status = status_data.get("status", "")
+
+            if status == "completed":
+                # Step 3 — Return the output
+                output = status_data.get("output") or status_data.get("result") or status_data
+                return jsonify(output), 200
+
+            if status in ("failed", "error"):
+                return jsonify({"error": "Job failed", "detail": status_data}), 500
+
+        return jsonify({"error": "Timed out waiting for job to complete", "job_id": job_id}), 504
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
