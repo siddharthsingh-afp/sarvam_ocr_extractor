@@ -268,7 +268,7 @@ def extract():
 
         # Step 2 — Poll until complete
         for _ in range(30):  # max 60 seconds
-            time.sleep(2)
+            time.sleep(3)
             status_res = requests.get(
                 f"{SARVAM_BASE}/{job_id}",
                 headers={"api-subscription-key": SARVAM_API_KEY},
